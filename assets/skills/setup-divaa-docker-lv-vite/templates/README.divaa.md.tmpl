@@ -1,0 +1,170 @@
+# {{SLUG}} on the shared divaa-docker host
+
+Runs {{SLUG}} (PHP {{PHP}} FPM + nginx [+ Vite HMR]) on the shared homelab host
+`192.168.1.21`, routed by Traefik, using the shared MySQL, Redis and Mailpit.
+
+- App:  **https://{{APP_DOMAIN}}**
+- Vite: **https://{{VITE_DOMAIN}}** (dev overlay only)
+- Mail: **https://mailpit.app.test** (everything the app "sends" lands here)
+
+Files:
+- `docker/php/Dockerfile`, `docker/php/php.ini` — PHP {{PHP}} FPM image
+- `docker/nginx/default.conf` — nginx → php-fpm (`{{PREFIX}}-app:9000`)
+- `docker-compose.divaa.yml` — base (app + web)
+- `docker-compose.divaa.dev.yml` — dev overlay (debug + Vite HMR)
+- `docker/deploy-divaa.sh` — the one-command deploy (gated; see below)
+- `mutagen.yml` — file-sync config **incl. the 0644/0755 permissions block** (committed)
+- `.env.divaa` — **host-only** secrets/overrides (gitignored; lives only on the host)
+
+## ⚠️ divaa-docker is a SHARED host
+
+It runs ~25 containers for 6+ sibling projects. Creating a database on the shared
+MySQL, or taking a container/router name on the `proxy` network, affects everyone.
+`deploy-divaa.sh` prompts before both. Don't set `ASSUME_YES=1` on a first deploy.
+
+## The one command
+
+From the project root on the Windows PC (Git Bash):
+
+```bash
+./docker/deploy-divaa.sh dev      # Vite HMR overlay
+./docker/deploy-divaa.sh prod     # built assets, base compose only
+```
+
+Idempotent — safe to re-run. It does: prefix-collision check → DB create (gated)
+→ scp `.env.divaa` + inject passwords → `mutagen project start` (+ verify the
+files landed 0644, not 0600) → `docker compose up -d --build` → `composer install`
+/ `key:generate` / `config:clear` / `migrate` → curl both domains.
+
+**Before the first run**, add both hosts entries (step 1) — the script can't do
+that (it needs elevation on the PC).
+
+The manual equivalents are below, in case you need to run a step in isolation.
+
+## 1. Hosts entries (on the Windows PC — needs Administrator)
+
+Both the app domain and the Vite domain. Use the generated script:
+
+```powershell
+# preview only - prints the exact lines, changes nothing:
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1
+
+# do it (pops a UAC prompt):
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1 -Elevate
+
+# want the Mailpit UI too:
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1 -Elevate -Domain mailpit.app.test
+```
+
+**APPEND-ONLY.** The hosts file is shared with every other project on this PC and
+with unrelated `0.0.0.0` blackhole blocks — the script never removes, rewrites or
+reorders a line. It backs up to `%TEMP%` first, skips domains already pointing at
+{{DIVAA_IP}}, and **refuses** (exit 3) if a domain points somewhere else rather
+than silently repointing it. Entries land in a marked block so a future uninstall
+can find them:
+
+```
+# >>> divaa-docker: {{SLUG}} >>>
+{{DIVAA_IP}}  {{APP_DOMAIN}}
+{{DIVAA_IP}}  {{VITE_DOMAIN}}
+# <<< divaa-docker: {{SLUG}} <<<
+```
+
+Exit codes: `0` done / nothing-to-do · `2` needs admin (prints the command to
+paste; nothing written) · `3` conflict · `1` verification failed. Without
+Administrator the write raises `UnauthorizedAccessException` — the script detects
+this up front and prints the elevated command rather than pretending it worked.
+
+## 2. Database (create once on the host — SHARED MySQL, confirm first)
+
+```bash
+ssh divaa-docker '
+  PW="$(grep MYSQL_ROOT_PASSWORD ~/data/.env | cut -d= -f2)"
+  docker exec -i mysql mysql -uroot -p"$PW" \
+    -e "CREATE DATABASE IF NOT EXISTS {{DB}}
+        CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+'
+```
+
+## 3. Put secrets on the host, inject passwords
+
+```bash
+ssh divaa-docker 'mkdir -p {{BETA_PATH}}'
+scp ./.env.divaa divaa-docker:{{BETA_PATH}}/
+# (the rest of the source arrives via Mutagen in step 4)
+
+# Inject the real MySQL root + Redis passwords in place (never printed). Values are
+# passed via the environment and read with awk's ENVIRON[] — no escape processing,
+# so any special char (| / & \ $) is written byte-for-byte:
+ssh divaa-docker '
+  export MP="$(grep MYSQL_ROOT_PASSWORD ~/data/.env | cut -d= -f2)"
+  export RP="$(grep REDIS_PASSWORD ~/data/.env | cut -d= -f2)"
+  f={{BETA_PATH}}/.env.divaa
+  awk "
+    /^DB_PASSWORD=__INJECT_ON_HOST__\$/    {print \"DB_PASSWORD=\" ENVIRON[\"MP\"]; next}
+    /^REDIS_PASSWORD=__INJECT_ON_HOST__\$/ {print \"REDIS_PASSWORD=\" ENVIRON[\"RP\"]; next}
+    {print}
+  " "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+'
+```
+
+## 4. File-sync — Mutagen (run from the project root)
+
+```bash
+mutagen project start                    # reads ./mutagen.yml
+mutagen sync list {{MUTAGEN_NAME}}       # wait for: Watching for changes, no Conflicts
+mutagen sync list {{MUTAGEN_NAME}} -l    # confirm the permissions block is active
+mutagen project stop                     # tear down
+```
+
+**Never use `mutagen sync create --ignore ...` instead.** `mutagen.yml` carries the
+`permissions` block (0644/0755); a CLI-created session defaults to Portable mode,
+every file lands 0600, and php-fpm (www-data) can't read any of it. Check:
+
+```bash
+ssh divaa-docker 'stat -c "%a %n" {{BETA_PATH}}/artisan'   # want 644, not 600
+```
+
+(Edit-on-host instead? Skip Mutagen; use VS Code Remote-SSH.)
+
+## 5. Bring dev mode up (on the host)
+
+```bash
+ssh divaa-docker 'cd {{BETA_PATH}} && \
+  docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml up -d --build'
+ssh divaa-docker 'docker exec {{PREFIX}}-app composer install'
+ssh divaa-docker 'docker exec {{PREFIX}}-app chown -R www-data:www-data storage bootstrap/cache'
+ssh divaa-docker 'docker exec {{PREFIX}}-app php artisan config:clear'   # cached prod config beats the overlay
+ssh divaa-docker 'docker exec {{PREFIX}}-app php artisan migrate --seed'  # add --force if needed
+ssh divaa-docker 'docker logs -f {{PREFIX}}-vite'   # watch Vite install + start
+```
+
+`APP_KEY`/`JWT_SECRET` come from the synced `.env`. Open **https://{{APP_DOMAIN}}**.
+
+## Back to production mode
+
+```bash
+npm run build      # on the PC (assets sync to the host)
+ssh divaa-docker 'cd {{BETA_PATH}} && \
+  docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml down && \
+  rm -f public/hot && \
+  docker compose -f docker-compose.divaa.yml up -d && \
+  docker exec {{PREFIX}}-app php artisan config:cache'
+```
+
+## Gotchas
+
+- **`Permission denied` on every include** — Mutagen wrote the host files 0600.
+  You created the session with `mutagen sync create` instead of `mutagen project start`;
+  the `permissions` block in `mutagen.yml` is the fix. Terminate and restart via the project.
+- **Cached prod config defeats the dev overlay** — `config:clear` after bringing dev up,
+  or `APP_ENV=local`/`APP_DEBUG=true` are silently ignored.
+- **`.env.divaa` must be LF.** A trailing `\r` breaks MySQL/Redis auth.
+- **Two hosts entries** — the app AND the `-vite` domain, or the SPA loads blank in dev
+  (the app shell loads but JS modules from the Vite domain fail to resolve).
+- **HMR stops reloading** — inotify events from the bind mount aren't reaching the
+  container. Set `VITE_USE_POLLING: "1"` in `docker-compose.divaa.dev.yml`.
+- **`package-lock.json`** is excluded from Mutagen — the container's `npm install`
+  rewrites it, which otherwise conflicts forever.
+- **`storage` / `bootstrap/cache`** must be `chown`ed to `www-data` or the app 500s.
+- Verify: `ssh divaa-docker 'docker ps | grep {{PREFIX}}'`; Traefik: https://traefik.app.test

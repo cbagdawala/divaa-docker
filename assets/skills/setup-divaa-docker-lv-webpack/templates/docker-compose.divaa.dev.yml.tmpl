@@ -1,0 +1,67 @@
+# {{SLUG}} — DEV overlay for the divaa-docker host. Adds Laravel Mix / webpack HMR.
+#
+# Use TOGETHER with the base file (base provides app + web + networks + secrets):
+#   docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml up -d
+#
+# This overlay:
+#   • Flips the `app` (php-fpm) container to APP_ENV=local / APP_DEBUG=true.
+#   • Adds a `{{PREFIX}}-hot` container running `npm run hot` (webpack-dev-server),
+#     routed through Traefik at https://{{HOT_DOMAIN}} so the HMR websocket is
+#     served over WSS (no mixed content — the app page is HTTPS).
+#
+# When webpack-dev-server runs it writes public/hot, and Laravel's mix() helper
+# auto-switches asset URLs to the dev server — no blade change needed.
+#
+# HMR reloads whenever the files webpack WATCHES change — those live on THIS host
+# (bind-mounted below), not on your PC. Topology A: edit on the PC and Mutagen
+# mirrors the change up (session "{{MUTAGEN_NAME}}"), tripping the watcher ~1-2s
+# after you save — so you do NOT run `npm run watch`/`hot` on the PC in dev mode;
+# this container is the builder. Topology C: edit on the host directly.
+#
+# Back to production: bring this overlay down, `up -d` the base alone, and remove
+# the stale marker on the host (`rm -f public/hot`) or the app keeps pointing at a
+# dev server that is no longer running. See docker/README.divaa.md.
+#
+# Prereq on the PC: hosts entry  {{DIVAA_IP}}  {{HOT_DOMAIN}}
+# (TLS is covered by the shared *.app.test wildcard cert — no per-host cert work.)
+
+services:
+  # Debug overrides win over the production values in .env.divaa
+  # (compose `environment` takes precedence over `env_file`).
+  app:
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+
+  hot:
+    # Node {{NODE}} is NOT a preference — it is pinned to the Laravel Mix major.
+    # Mix 5 pins webpack 4, whose hashing uses a MD4 digest that OpenSSL 3
+    # (node >= 17) removed: on node 18+ the build dies immediately with
+    #   error:0308010C:digital envelope routines::unsupported
+    # If you bump this image, bump Mix too — otherwise the container crash-loops.
+    image: node:{{NODE}}
+    container_name: {{PREFIX}}-hot
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # node_modules is Mutagen-ignored (Windows-built binaries must never reach the
+    # Linux host), so install Linux binaries here first, then start the dev server.
+    command: sh -c "npm install && npm run hot"
+    environment:
+      # Consumed by the MIX_HMR block in webpack.mix.js — bakes the -hot host:port
+      # into public/hot (asset URLs) and into the HMR sockjs client, so both route
+      # through Traefik over WSS. {{HOT_PORT}} must match the Traefik loadbalancer
+      # port below: it is one setting written in two places.
+      MIX_HMR_HOST: {{HOT_DOMAIN}}
+      MIX_HMR_PORT: "{{HOT_PORT}}"
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appnet
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.{{PREFIX}}-hot.rule=Host(`{{HOT_DOMAIN}}`)
+      - traefik.http.routers.{{PREFIX}}-hot.entrypoints=websecure
+      - traefik.http.routers.{{PREFIX}}-hot.tls=true
+      - traefik.http.services.{{PREFIX}}-hot.loadbalancer.server.port={{HOT_PORT}}

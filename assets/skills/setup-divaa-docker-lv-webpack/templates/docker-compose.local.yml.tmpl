@@ -1,0 +1,65 @@
+# {{SLUG}} — LOCAL Docker dev on the PC (topology B).
+#
+# Runs the whole stack on your machine with native hot-reload (bind-mounted
+# source), connecting to the shared MySQL over the LAN. The shared Redis is
+# container-only on the divaa host and NOT reachable from the PC, so this stack
+# ships its OWN throwaway Redis for cache/session.
+#
+#   • App page:   http://localhost:{{WEB_PORT}}
+#   • webpack HMR: http://localhost:{{HOT_PORT_LOCAL}} (plain ws — the page is http,
+#     so no TLS and no 443 here; that is the divaa/Traefik path, not this one)
+#   • MySQL:      192.168.1.21:3306 (shared, reached directly over the LAN)
+#   • Redis:      local `redis` container
+#
+# Bring up:  docker compose -f docker-compose.local.yml up -d --build
+# Secrets/overrides come from .env.local (gitignored) via env_file.
+
+services:
+  app:
+    build:
+      context: ./docker/php
+    image: {{PREFIX}}-php:{{PHP}}
+    # Keep this name — the nginx config resolves the fastcgi upstream by it.
+    container_name: {{PREFIX}}-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - .env.local
+
+  web:
+    image: nginx:1.27-alpine
+    container_name: {{PREFIX}}-web-local
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "{{WEB_PORT}}:80"
+    volumes:
+      - ./:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+  hot:
+    # Pinned to the Laravel Mix major — Mix 5 (webpack 4) cannot build on node 18+
+    # (OpenSSL 3 removed the MD4 digest it hashes with). See the dev overlay.
+    image: node:{{NODE}}
+    container_name: {{PREFIX}}-hot-local
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: sh -c "npm install && npm run hot"
+    environment:
+      # Consumed by the MIX_HMR block in webpack.mix.js. mix() turns this into a
+      # protocol-relative asset URL, which on a plain-http page resolves to http —
+      # so no TLS is involved on this path.
+      MIX_HMR_HOST: localhost
+      MIX_HMR_PORT: "{{HOT_PORT_LOCAL}}"
+    ports:
+      - "{{HOT_PORT_LOCAL}}:{{HOT_PORT_LOCAL}}"
+    volumes:
+      - ./:/var/www/html
+
+  redis:
+    image: redis:7-alpine
+    container_name: {{PREFIX}}-redis-local
+    restart: unless-stopped

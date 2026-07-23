@@ -1,0 +1,53 @@
+# {{SLUG}} — app nginx. Handles plain HTTP on :80 and forwards PHP to php-fpm.
+# On the shared host (topology A/C) TLS is terminated at Traefik and HTTPS is
+# signalled to PHP in the .php location below; for local dev (topology B) the app
+# is served as plain HTTP and that signal is omitted.
+
+server {
+    listen 80;
+    # Default server for any host — this container is only ever reached via the
+    # reverse proxy (Traefik for *.app.test on the divaa host), which forwards by
+    # Host header regardless of server_name.
+    server_name _;
+
+    root /var/www/html/public;
+    index index.php index.html;
+
+    # Match the app's upload expectations (keep in sync with php.ini)
+    client_max_body_size 64M;
+
+    charset utf-8;
+
+    # Docker embedded DNS so the php-fpm upstream is resolved at request time
+    # (avoids nginx hard-failing at startup if the `app` container isn't up yet).
+    resolver 127.0.0.11 ipv6=off valid=10s;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    error_page 404 /index.php;
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        # Resolve by unique container_name so it works on the shared proxy
+        # network too (avoids clashing with any other "app" service there).
+        set $fpm_upstream {{PREFIX}}-app:9000;
+        fastcgi_pass $fpm_upstream;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        fastcgi_param DOCUMENT_ROOT $realpath_root;
+{{FPM_HTTPS}}
+        fastcgi_read_timeout 300;
+    }
+
+    # Deny access to hidden files (except ACME challenge)
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}

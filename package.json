@@ -1,0 +1,52 @@
+{
+  "name": "divaa-docker",
+  "version": "1.0.0",
+  "description": "CLI to install the divaa-docker Agent Skills — one-command onboarding of Laravel (Vite or Laravel Mix/webpack) apps onto the shared divaa-docker homelab host — into AI coding assistants like Claude Code and opencode.",
+  "type": "module",
+  "bin": {
+    "divaa-docker": "bin/divaa-docker.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "assets"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/divaa-docker.mjs",
+    "lint:skill": "node lib/lint-skill.mjs"
+  },
+  "keywords": [
+    "divaa-docker",
+    "laravel",
+    "docker",
+    "vite",
+    "webpack",
+    "mutagen",
+    "traefik",
+    "agent-skill",
+    "skill",
+    "claude",
+    "claude-code",
+    "opencode",
+    "ai"
+  ],
+  "author": "cbagdawala",
+  "license": "MIT",
+  "homepage": "https://github.com/cbagdawala/divaa-docker#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cbagdawala/divaa-docker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cbagdawala/divaa-docker/issues"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "ora": "^8.1.1",
+    "prompts": "^2.4.2"
+  }
+}

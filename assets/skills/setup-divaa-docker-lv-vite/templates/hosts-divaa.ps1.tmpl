@@ -1,0 +1,233 @@
+<#
+.SYNOPSIS
+  Append {{SLUG}}'s dev domains to the Windows hosts file, pointing at divaa-docker.
+
+.DESCRIPTION
+  APPEND-ONLY, by design. This script never removes, rewrites, or reorders an
+  existing line. The hosts file is shared with every other project on this machine
+  (innflow, brahma-inventory, hwrf, optus, precision-*, spool-tracker, ...) AND with
+  unrelated blocks (e.g. 0.0.0.0 ad/licence blackholes). Rewriting it breaks all of
+  them at once, so the only mutation this script can perform is "append to the end".
+
+  Idempotent: a domain already mapped to {{DIVAA_IP}} is left alone. A domain mapped
+  to a DIFFERENT IP is reported as a conflict and NOT touched - you decide.
+
+  NOTE (deliberate): this file is ASCII-only. Windows PowerShell 5.1 decodes a
+  BOM-less .ps1 as ANSI/cp1252, so a UTF-8 em-dash (bytes E2 80 94) arrives as
+  three cp1252 chars, the last of which is U+201D - a smart quote the parser
+  treats as a STRING TERMINATOR. One em-dash in a comment therefore produces a
+  cascade of nonsense syntax errors far from the real line. The generator also
+  writes this file WITH a UTF-8 BOM and refuses to emit it if any non-ASCII
+  character is present. Keep both safeguards; no typographic punctuation here.
+
+.PARAMETER Elevate
+  Attempt to self-elevate via UAC when not already Administrator. Without it, the
+  script prints the exact elevated command to paste and exits 2.
+
+.PARAMETER HostsPath
+  Override the hosts file path. For testing only - defaults to the real file.
+
+.PARAMETER Domain
+  Extra domain(s) to map, on top of this project's app + vite domains.
+
+.OUTPUTS
+  Exit 0 = nothing to do, or appended + verified
+  Exit 2 = elevation required (or declined) - paste-able command printed
+  Exit 3 = conflict: a domain points somewhere else. Nothing was written.
+  Exit 1 = unexpected failure (including "we appended but verification failed")
+#>
+[CmdletBinding()]
+param(
+  [switch]$Elevate,
+  [string]$HostsPath = "$env:windir\System32\drivers\etc\hosts",
+  [string[]]$Domain = @()
+)
+
+$ErrorActionPreference = 'Stop'
+$IP = '{{DIVAA_IP}}'
+$SLUG = '{{SLUG}}'
+
+# The domains this project needs. BOTH the app and the -vite domain are required in
+# dev: the app shell loads from the app domain but pulls its JS modules from the vite
+# domain, so a missing vite entry = a blank SPA with no obvious error.
+$wanted = @('{{APP_DOMAIN}}', '{{VITE_DOMAIN}}') + $Domain | Where-Object { $_ } | Select-Object -Unique
+
+function Write-Info { param($m) Write-Host "  $m" }
+function Write-Good { param($m) Write-Host "  $m" -ForegroundColor Green }
+function Write-Warn { param($m) Write-Host "  $m" -ForegroundColor Yellow }
+function Write-Bad  { param($m) Write-Host "  $m" -ForegroundColor Red }
+
+Write-Host ""
+Write-Host "hosts entries for $SLUG -> $IP" -ForegroundColor Cyan
+Write-Info "file: $HostsPath"
+
+if (-not (Test-Path $HostsPath)) { Write-Bad "hosts file not found: $HostsPath"; exit 1 }
+
+# --------------------------------------------------------------- parse (read-only)
+# Parse every non-comment line into hostname -> ip. A hosts line is
+# "<ip> <name> [name...]" with arbitrary whitespace; trailing comments are legal.
+$existing = @{}
+foreach ($line in (Get-Content -LiteralPath $HostsPath)) {
+  $t = $line.Trim()
+  if ($t -eq '' -or $t.StartsWith('#')) { continue }
+  $t = ($t -split '#', 2)[0].Trim()          # strip trailing comment
+  $parts = $t -split '\s+'
+  if ($parts.Count -lt 2) { continue }
+  $lineIp = $parts[0]
+  foreach ($name in $parts[1..($parts.Count - 1)]) {
+    if (-not $existing.ContainsKey($name.ToLower())) { $existing[$name.ToLower()] = $lineIp }
+  }
+}
+Write-Info "parsed $($existing.Count) existing hostname mapping(s) - none will be modified"
+
+# ------------------------------------------------------------ classify what we need
+$toAdd = @(); $already = @(); $conflicts = @()
+foreach ($d in $wanted) {
+  $key = $d.ToLower()
+  if (-not $existing.ContainsKey($key))      { $toAdd += $d }
+  elseif ($existing[$key] -eq $IP)           { $already += $d }
+  else { $conflicts += [pscustomobject]@{ Domain = $d; CurrentIp = $existing[$key] } }
+}
+
+foreach ($d in $already) { Write-Good "already mapped to ${IP}: $d" }
+
+if ($conflicts.Count -gt 0) {
+  Write-Host ""
+  Write-Bad "CONFLICT - these domains already point somewhere else:"
+  foreach ($c in $conflicts) { Write-Bad ("    {0}  ->  {1}   (this project wants {2})" -f $c.Domain, $c.CurrentIp, $IP) }
+  Write-Host ""
+  Write-Warn "Refusing to rewrite them: another project or tool may own those entries,"
+  Write-Warn "and silently repointing them could break it. Decide yourself, then either"
+  Write-Warn "edit the line by hand (elevated), or pick a different slug/domain."
+  exit 3
+}
+
+if ($toAdd.Count -eq 0) { Write-Host ""; Write-Good "nothing to do - all entries present and correct"; exit 0 }
+
+Write-Host ""
+Write-Info "to append:"
+foreach ($d in $toAdd) { Write-Info "    $IP  $d" }
+
+# --------------------------------------------------------------- build the block
+# Marker comments so a future uninstall can find exactly these lines without
+# guessing which project owns them. Appended as one block.
+$nl = "`r`n"
+$open  = '# >>> divaa-docker: ' + $SLUG + ' >>>'
+$close = '# <<< divaa-docker: ' + $SLUG + ' <<<'
+$block = $open + $nl
+foreach ($d in $toAdd) { $block += "$IP  $d$nl" }
+$block += $close + $nl
+
+# ---------------------------------------------------------------- elevation check
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+# A non-default -HostsPath is a test fixture; it needs no elevation.
+$isRealHosts = ($HostsPath -eq "$env:windir\System32\drivers\etc\hosts")
+$needsAdmin = (-not $isAdmin) -and $isRealHosts
+
+if ($needsAdmin) {
+  $self = $PSCommandPath
+  $psExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$self`"")
+  if ($Domain.Count) { $argList += @('-Domain', ($Domain -join ',')) }
+  $cmdLine = "$psExe " + ($argList -join ' ')
+
+  if (-not $Elevate) {
+    Write-Host ""
+    Write-Warn "The hosts file requires Administrator. This shell is NOT elevated, so"
+    Write-Warn "NOTHING has been written. Re-run with -Elevate for a UAC prompt, or"
+    Write-Warn "paste this into an elevated PowerShell:"
+    Write-Host ""
+    Write-Host "    $cmdLine" -ForegroundColor White
+    Write-Host ""
+    Write-Warn "Or append these lines by hand (elevated) - it is all the above does:"
+    Write-Host ""
+    foreach ($l in ($block -split "`r`n" | Where-Object { $_ })) { Write-Host "    $l" -ForegroundColor White }
+    Write-Host ""
+    exit 2
+  }
+
+  Write-Host ""
+  Write-Info "not elevated - requesting UAC (approve the prompt)..."
+  try {
+    $p = Start-Process -FilePath $psExe -ArgumentList $argList -Verb RunAs -Wait -PassThru
+  } catch {
+    Write-Host ""
+    Write-Warn "elevation declined or failed: $($_.Exception.Message)"
+    Write-Warn "Paste this into an elevated PowerShell instead:"
+    Write-Host ""
+    Write-Host "    $cmdLine" -ForegroundColor White
+    Write-Host ""
+    exit 2
+  }
+  # NEVER trust the child's exit code alone - verify against the file itself.
+  Write-Info "elevated child exited $($p.ExitCode) - verifying the file..."
+  $after = [System.IO.File]::ReadAllText($HostsPath)
+  $missing = @($toAdd | Where-Object { $after -notmatch [regex]::Escape($_) })
+  if ($missing.Count) {
+    Write-Bad "verification FAILED - still missing: $($missing -join ', ')"
+    Write-Bad "Nothing was appended. Run this in an elevated shell by hand:"
+    Write-Host "    $cmdLine" -ForegroundColor White
+    exit 1
+  }
+  Write-Good "verified - entries are present"
+  exit 0
+}
+
+# -------------------------------------------------------------- backup, then append
+# Back up BEFORE touching it.
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$backup = Join-Path $env:TEMP "hosts.backup-$stamp"
+try {
+  Copy-Item -LiteralPath $HostsPath -Destination $backup -Force
+  Write-Info "backup: $backup"
+} catch {
+  Write-Bad "could not back up the hosts file - refusing to modify it. $($_.Exception.Message)"
+  exit 1
+}
+
+$before = [System.IO.File]::ReadAllText($HostsPath)
+
+# Guarantee a line break before our block so we can never merge into (and thereby
+# alter) whatever the current last line is. This adds a newline; it does not change
+# any existing line's content.
+$prefix = ''
+if ($before.Length -gt 0 -and -not $before.EndsWith("`n")) { $prefix = $nl }
+
+try {
+  # ASCII, explicit CRLF, no BOM: matches the file's existing encoding. A BOM here
+  # would be prepended to the FIRST line only on a new file, but the Windows DNS
+  # client is happiest with plain ASCII - and hosts entries are ASCII by definition.
+  $enc = New-Object System.Text.ASCIIEncoding
+  [System.IO.File]::AppendAllText($HostsPath, $prefix + $nl + $block, $enc)
+} catch [System.UnauthorizedAccessException] {
+  Write-Bad "Access denied writing $HostsPath despite reporting elevated."
+  Write-Bad "Check for a read-only attribute or an AV/EDR hosts-file lock."
+  exit 1
+} catch {
+  Write-Bad "append failed: $($_.Exception.Message)"
+  exit 1
+}
+
+# ------------------------------------------------------------------------- verify
+# Re-read from disk. A write that "succeeded" but produced no change is exactly the
+# silent failure this whole script exists to prevent.
+$after = [System.IO.File]::ReadAllText($HostsPath)
+$missing = @($toAdd | Where-Object { $after -notmatch [regex]::Escape($_) })
+if ($missing.Count) {
+  Write-Bad "verification FAILED - missing after write: $($missing -join ', ')"
+  Write-Bad "restore from: $backup"
+  exit 1
+}
+
+# Prove append-only: the previous content must still be an exact prefix of the new.
+if (-not $after.StartsWith($before)) {
+  Write-Bad "APPEND-ONLY VIOLATED - prior content changed. Restore now from: $backup"
+  exit 1
+}
+
+Write-Host ""
+$n = $toAdd.Count
+Write-Good "appended $n entry/entries; $($before.Length) bytes of prior content untouched"
+if ($isRealHosts) { ipconfig /flushdns | Out-Null; Write-Good "dns cache flushed" }
+exit 0

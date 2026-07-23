@@ -1,0 +1,61 @@
+# Mutagen project file — live file sync from this Windows checkout to the shared
+# "divaa-docker" host (192.168.1.21), where {{SLUG}} runs as a volume-mounted
+# container serving files off the host working copy at
+# {{BETA_PATH}} (mapped to /var/www/html in the app container).
+# Edits only appear on the host once Mutagen mirrors them (~1.5s).
+#
+# The dev stack on divaa-docker runs `npm run dev` (Vite dev server) + Laravel,
+# both watching HOST files — not this PC — so PC edits must be synced up. PHP
+# edits are live immediately; .vue/.ts edits are live after sync + browser
+# refresh (do NOT run `npm run build`; the dev server is authoritative).
+#
+# Lifecycle (run from this directory, which contains mutagen.yml):
+#   mutagen project start              # create + start the "{{MUTAGEN_NAME}}" session
+#   mutagen project stop               # tear it down
+#   mutagen sync list {{MUTAGEN_NAME}} # inspect status
+#   mutagen sync list {{MUTAGEN_NAME}} -l  # full config incl. permissions mode
+#
+# Use `mutagen project start`, NOT `mutagen sync create` with --ignore flags.
+# The project file is the single source of truth for ignores AND permissions;
+# a CLI-created session silently loses the permissions block below.
+#
+# WHY THE permissions BLOCK EXISTS (the 0600 gotcha):
+# Windows (alpha) has no POSIX modes. With Mutagen's default "Portable"
+# permissions mode, every file it writes on the Linux host lands as 0600
+# (owner-only). php-fpm runs as www-data, NOT the owner ({{HOST_USER}}), so it
+# can't read a 0600 file →
+#   include(/var/www/html/...): Failed to open stream: Permission denied
+# Forcing 0644 files / 0755 dirs makes synced app code world-readable so
+# www-data can serve it. This replaces the old "chmod 644 on the host after
+# every edit" workaround.
+
+sync:
+  {{MUTAGEN_NAME}}:
+    alpha: "."
+    beta: "divaa-docker:{{BETA_PATH}}"
+    mode: "two-way-safe"
+    permissions:
+      defaultFileMode: 0644
+      defaultDirectoryMode: 0755
+    ignore:
+      vcs: true          # skip the .git directory
+      paths:
+        # --- Dependency + build caches (each side manages its own) ---
+        - "/vendor"
+        - "/node_modules"
+        - "/package-lock.json"
+        - "/bootstrap/cache"
+        # --- Host-only secrets (must not be clobbered by the PC copy) ---
+        - "/.env.divaa"
+        # --- Build / HMR artifacts (host-local) ---
+        - "/public/hot"       # Vite HMR marker (host-local)
+        - "/public/build"     # production build output
+        - "/public/storage"   # symlink to storage/app/public
+        # --- Laravel runtime state (host-local) ---
+        - "/storage/logs"
+        - "/storage/framework/cache"
+        - "/storage/framework/sessions"
+        - "/storage/framework/views"
+        # --- Editor / tooling noise ---
+        - "/.idea"
+        - "/.superpowers"

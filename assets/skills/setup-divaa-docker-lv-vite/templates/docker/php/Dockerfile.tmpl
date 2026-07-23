@@ -1,0 +1,40 @@
+# PHP {{PHP}} FPM for {{SLUG}} (Laravel).
+# Pin the PHP version to what composer.lock requires — recent Laravel + Symfony
+# components often need >= 8.4.
+FROM php:{{PHP}}-fpm
+
+# System libraries needed to build the common Laravel PHP extensions
+# (gd/intl/zip cover most apps: image handling, localisation, Excel/zip).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        libzip-dev \
+        libpng-dev \
+        libjpeg-dev \
+        libfreetype6-dev \
+        libicu-dev \
+        libonig-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" \
+        pdo_mysql \
+        mbstring \
+        exif \
+        pcntl \
+        bcmath \
+        gd \
+        zip \
+        intl \
+        opcache \
+    # Redis client extension — shared Redis on the divaa host is redis:6379.
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Composer 2 (for in-container installs / artisan tooling).
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# App-specific PHP settings (upload/memory limits, timezone, dev-friendly opcache).
+COPY php.ini /usr/local/etc/php/conf.d/zz-app.ini
+
+WORKDIR /var/www/html

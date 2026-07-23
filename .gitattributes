@@ -1,0 +1,8 @@
+# Keep LF in the repo for all text so the CLI shebang and shipped skill files
+# stay Unix-clean for macOS/Linux consumers regardless of the author's OS.
+* text=auto eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.tmpl text eol=lf
+*.sh text eol=lf

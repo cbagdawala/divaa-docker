@@ -1,0 +1,10 @@
+# The package.json "files" allow-list is authoritative (bin, lib, assets).
+# This file is a belt-and-suspenders exclude for dev artifacts.
+node_modules/
+*.tgz
+.DS_Store
+.env
+.idea/
+.vscode/
+.github/
+downloads/

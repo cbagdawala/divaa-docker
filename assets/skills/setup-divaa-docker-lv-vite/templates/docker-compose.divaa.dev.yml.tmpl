@@ -1,0 +1,59 @@
+# {{SLUG}} — DEV overlay for the divaa-docker host. Adds Vite hot-module-reload.
+#
+# Use TOGETHER with the base file (base provides app + web + networks + secrets):
+#   docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml up -d
+#
+# This overlay:
+#   • Flips the `app` (php-fpm) container to APP_ENV=local / APP_DEBUG=true.
+#   • Adds a `{{PREFIX}}-vite` container running `npm run dev` (Vite dev server)
+#     routed through Traefik at https://{{VITE_DOMAIN}} so the HMR websocket is
+#     served over WSS (no mixed content — the app page is HTTPS).
+#
+# HMR reloads whenever the files Vite WATCHES change — those live on THIS host
+# (bind-mounted). Topology A: edit on the PC, a file-sync tool (Mutagen) mirrors
+# the change to the host, triggering the watcher. Topology C: edit on the host
+# directly (VS Code Remote-SSH). If a change never reloads, set VITE_USE_POLLING=1.
+#
+# When Vite runs it writes public/hot and Laravel's @vite auto-switches to the dev
+# server. Back to production: bring this overlay down, `up -d` the base alone,
+# then `rm -f public/hot`.
+
+services:
+  # Debug overrides win over the production values in .env.divaa
+  # (compose `environment` takes precedence over `env_file`).
+  app:
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+
+  vite:
+    image: node:22-bookworm-slim
+    container_name: {{PREFIX}}-vite
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # Install deps (node_modules is NOT synced from the PC — Linux binaries are
+    # built here), then start the dev server bound to all interfaces.
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      # Consumed by vite.config — route the dev server + HMR ws through Traefik.
+      VITE_DEV_SERVER_HOST: 0.0.0.0
+      VITE_DEV_SERVER_PORT: "{{VITE_PORT}}"
+      VITE_HMR_HOST: {{VITE_DOMAIN}}
+      VITE_HMR_PROTOCOL: wss
+      VITE_HMR_CLIENT_PORT: "443"
+      VITE_ALLOWED_HOSTS: {{VITE_DOMAIN}},{{APP_DOMAIN}}
+      VITE_CORS_ORIGIN: https://{{APP_DOMAIN}}
+      # Set to "1" if HMR stops picking up edits that arrive via file-sync.
+      VITE_USE_POLLING: "0"
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appnet
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.{{PREFIX}}-vite.rule=Host(`{{VITE_DOMAIN}}`)
+      - traefik.http.routers.{{PREFIX}}-vite.entrypoints=websecure
+      - traefik.http.routers.{{PREFIX}}-vite.tls=true
+      - traefik.http.services.{{PREFIX}}-vite.loadbalancer.server.port={{VITE_PORT}}
