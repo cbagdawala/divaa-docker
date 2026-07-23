@@ -38,6 +38,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs'
 import { dirname, resolve, basename, join } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -45,6 +46,32 @@ import { spawnSync } from 'node:child_process'
 // never reaches back into a sibling skill directory.
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TPL = join(HERE, 'templates')
+
+// ---- global divaa-docker config (host-fact defaults) --------------------
+// Read-only view of ~/.divaa-docker/config.json (written by the
+// divaa-docker-config skill). Supplies host facts — IP, SSH user, apps root —
+// as DEFAULTS so they aren't retyped per project. TOLERANT BY DESIGN: a missing
+// file or a parse error yields {} and never throws, so with no config present
+// the generator behaves EXACTLY as before (byte-identical output). Precedence is
+// always: explicit CLI flag > global config > hardcoded fallback.
+function loadGlobalConfig() {
+  try {
+    const p = join(homedir(), '.divaa-docker', 'config.json')
+    if (!existsSync(p)) return {}
+    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {}
+  } catch { return {} }
+}
+const gcfg = loadGlobalConfig()
+const gHost = (gcfg && typeof gcfg.host === 'object' && gcfg.host) || {}
+const gSsh = (gHost && typeof gHost.ssh === 'object' && gHost.ssh) || {}
+// Resolve one host fact: explicit flag wins, else global config, else fallback.
+// Also reports the source so `plan` can label it (`given` / `config` / default).
+function hostFact(flagKey, cfgVal, fallback) {
+  if (args[flagKey] !== undefined) return { value: String(args[flagKey]), src: 'given' }
+  if (cfgVal !== undefined && cfgVal !== null && cfgVal !== '') return { value: String(cfgVal), src: 'config' }
+  return { value: fallback, src: `derived (${fallback})` }
+}
 
 // ---- parse args ---------------------------------------------------------
 const argv = process.argv.slice(2)
@@ -95,7 +122,20 @@ const db = args.db || `${prefix}_db`
 const topology = String(args.topology || 'a').toLowerCase()
 const webPort = String(args['web-port'] || '8080')
 const vitePort = String(args['vite-port'] || '5281')
-const hostUser = String(args['host-user'] || 'chintan')
+// Host facts: explicit flag > global config > hardcoded fallback (see hostFact).
+// With no config file present, every fallback below equals today's literal, so
+// output stays byte-identical.
+const hostUserF = hostFact('host-user', gSsh.user, 'chintan')
+const hostUser = hostUserF.value
+const divaaIpF = hostFact('ip', gHost.ip, '192.168.1.21')
+const divaaIp = divaaIpF.value
+// appsRoot defaults to /home/<user>/apps — the SAME string BETA_PATH used before,
+// so an absent config reproduces the old path exactly. There is no CLI flag for
+// it (kept config-or-default), so `ip`-style flag lookup would never match.
+const appsRootF = (gHost.appsRoot !== undefined && gHost.appsRoot !== null && gHost.appsRoot !== '')
+  ? { value: String(gHost.appsRoot), src: 'config' }
+  : { value: `/home/${hostUser}/apps`, src: `derived (/home/${hostUser}/apps)` }
+const appsRoot = appsRootF.value
 // The dev domains are asked for explicitly (SKILL.md Step 1) rather than being
 // silently derived — but the derivation stays as the default so the common case
 // needs no typing.
@@ -123,14 +163,15 @@ const vars = {
   APP_DOMAIN: appDomain,
   VITE_DOMAIN: viteDomain,
   VITE_PORT: vitePort,
-  DIVAA_IP: '192.168.1.21',
+  DIVAA_IP: divaaIp,
   WEB_PORT: webPort,
   REDIS_PREFIX: `${prefix}_`,
   PROJECT_DIR: projectDir,
   HOST_USER: hostUser,
   // Mutagen beta + host deploy dir. The SAME string must be used by the scp
   // target, the sync beta, and the host compose dir — so it is derived once.
-  BETA_PATH: `/home/${hostUser}/apps/${projectDir}`,
+  // appsRoot comes from the global config when set (else /home/<user>/apps).
+  BETA_PATH: `${appsRoot}/${projectDir}`,
   MUTAGEN_NAME: prefix,
   // php-fpm HTTPS signal: on behind Traefik TLS (A/C), off for plain-http local (B).
   FPM_HTTPS: topology === 'b'
@@ -155,11 +196,14 @@ if (command === 'plan') {
     ['php version', php, provided('php', '8.4 — DETECT from composer.lock')],
     ['vite port', vitePort, provided('vite-port', '5281 house convention')],
     ['web port (topology b)', webPort, provided('web-port', '8080')],
-    ['host ssh user', hostUser, provided('host-user', 'chintan')],
-    ['host dir', vars.BETA_PATH, `derived (/home/${hostUser}/apps/${projectDir})`],
+    ['host ssh user', hostUser, hostUserF.src],
+    ['host dir', vars.BETA_PATH, appsRootF.src === 'config'
+      ? `config appsRoot (${appsRoot}/${projectDir})`
+      : `derived (${appsRoot}/${projectDir})`],
     ['mutagen session', vars.MUTAGEN_NAME, 'derived (= prefix)'],
     ['redis key prefix', vars.REDIS_PREFIX, 'derived (= prefix_)'],
-    ['divaa host ip', vars.DIVAA_IP, 'fixed'],
+    // 'fixed' preserves the pre-config label when neither flag nor config set it.
+    ['divaa host ip', vars.DIVAA_IP, divaaIpF.src === 'given' ? 'given' : divaaIpF.src === 'config' ? 'config' : 'fixed'],
   ]
   console.log('\nsetup-divaa-docker-lv-vite — PLAN (nothing written)\n')
   const w = Math.max(...rows.map(([k]) => k.length))

@@ -78,6 +78,15 @@ FALLBACK is a guess — confirm it before writing.
 | **hot-probe** | detected from `mix.js()` output | The asset the deploy script curls to prove HMR is alive |
 | **host-user** | `chintan` | SSH user → host dir `/home/<user>/apps/<projectDir>` |
 
+> **Global host config.** Three of the host facts above — IP (`192.168.1.21`),
+> host-user (`chintan`), and apps root (`/home/<user>/apps`) — are now sourced from
+> the global `~/.divaa-docker/config.json` when it exists (managed by the
+> **divaa-docker-config** skill), falling back to the built-in defaults shown here
+> otherwise. Explicit generator flags still win over both. `plan` labels each
+> value's source, so `config` means it came from that store. (The `proxy` network
+> and `app.test` domain suffix live in the config schema too but are still
+> hardcoded in the templates — not yet read by the generator.)
+
 Pass the confirmed values as explicit flags in Step 2 — including `--domain` and
 `--db` even when they match the default — so the generated files record what was
 agreed rather than what happened to be inferred.
