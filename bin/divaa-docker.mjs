@@ -31,6 +31,7 @@ program
   .option('--skill <names>', skillHelp)
   .option('--global', 'install into your home dir (all projects) instead of the current project')
   .option('--force', 'overwrite an existing install')
+  .option('--no-buddyx', 'skip co-installing the BuddyX orchestrator companion')
   .action((opts) => init(opts));
 
 program

@@ -1,7 +1,7 @@
 {
   "name": "divaa-docker",
-  "version": "1.1.0",
-  "description": "CLI to install the divaa-docker Agent Skills — one-command onboarding of Laravel (Vite or Laravel Mix/webpack) apps onto the shared divaa-docker homelab host — into AI coding assistants like Claude Code and opencode.",
+  "version": "1.2.0",
+  "description": "CLI to install the divaa-docker Agent Skills — one-command onboarding of Laravel (Vite or Laravel Mix/webpack) and CodeIgniter 3/4 apps onto the shared divaa-docker homelab host — into AI coding assistants like Claude Code and opencode.",
   "type": "module",
   "bin": {
     "divaa-docker": "bin/divaa-docker.mjs"
@@ -21,6 +21,7 @@
   "keywords": [
     "divaa-docker",
     "laravel",
+    "codeigniter",
     "docker",
     "vite",
     "webpack",
@@ -44,6 +45,7 @@
     "url": "https://github.com/cbagdawala/divaa-docker/issues"
   },
   "dependencies": {
+    "buddyx": "^2.2.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "ora": "^8.1.1",

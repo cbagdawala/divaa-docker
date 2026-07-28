@@ -1,0 +1,16 @@
+; App-level PHP overrides for the Dockerised {{SLUG}} app.
+; Generous upload/memory limits for file uploads and report rendering.
+
+upload_max_filesize = 64M
+post_max_size = 64M
+memory_limit = 512M
+max_execution_time = 300
+max_input_time = 300
+max_input_vars = 5000
+
+date.timezone = UTC
+
+; OPcache (dev-friendly: revalidate on each request so edits take effect immediately)
+opcache.enable = 1
+opcache.revalidate_freq = 0
+opcache.validate_timestamps = 1

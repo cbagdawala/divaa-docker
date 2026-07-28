@@ -1,0 +1,196 @@
+# {{SLUG}} on the shared divaa-docker host
+
+Runs {{SLUG}} (CodeIgniter 3 — PHP {{PHP}} FPM + nginx) on the shared homelab
+host `{{DIVAA_IP}}`, routed by Traefik, using the shared MySQL, Redis and Mailpit.
+
+- App:  **https://{{APP_DOMAIN}}**
+- Mail: **https://mailpit.app.test** (everything the app "sends" lands here, if
+  `config/email.php` reads the `MAIL_*` env vars)
+
+Files:
+- `docker/php/Dockerfile`, `docker/php/php.ini` — PHP {{PHP}} FPM image (mysqli + pdo_mysql + phpredis)
+- `docker/nginx/default.conf` — nginx → php-fpm (`{{PREFIX}}-app:9000`); docroot is the
+  project root (CI3 has no `public/`), with `application/`/`system/` denied by URL
+- `docker-compose.divaa.yml` — base (app + web), `CI_ENV=production`
+- `docker-compose.divaa.dev.yml` — dev overlay (`CI_ENV=development`, errors shown)
+- `docker/deploy-divaa.sh` — the one-command deploy (gated; see below)
+- `mutagen.yml` — file-sync config **incl. the 0644/0755 permissions block** (committed)
+- `.env.divaa` — **host-only** secrets/overrides (gitignored; lives only on the host)
+
+## How the environment reaches CI3 (no dotenv!)
+
+CodeIgniter 3 never reads a `.env` file. `.env.divaa` becomes real container
+environment variables via compose `env_file`, and the app sees them only where:
+- `index.php` reads `$_SERVER['CI_ENV']` → `ENVIRONMENT` (stock CI3 behaviour);
+- `application/config/database.php` calls `getenv('DB_*')` (the generator patches
+  the stock file; a customised one needs the hand-merge from
+  `ci3-database-env-block.php` in the skill directory);
+- any other config you point at `getenv()` (`BASE_URL`, `REDIS_*`, `MAIL_*` are
+  provided for that purpose).
+
+## ⚠️ divaa-docker is a SHARED host
+
+It runs ~25 containers for 6+ sibling projects. Creating a database on the shared
+MySQL, or taking a container/router name on the `proxy` network, affects everyone.
+`deploy-divaa.sh` prompts before both. Don't set `ASSUME_YES=1` on a first deploy.
+
+## The one command
+
+From the project root on the Windows PC (Git Bash):
+
+```bash
+./docker/deploy-divaa.sh dev      # CI_ENV=development overlay
+./docker/deploy-divaa.sh prod     # CI_ENV=production, base compose only
+```
+
+Idempotent — safe to re-run. It does: prefix-collision check → DB create (gated)
+→ scp `.env.divaa` + inject passwords → `mutagen project start` (+ verify the
+files landed 0644, not 0600) → `docker compose up -d --build` → `composer install`
+(only if `composer.json` exists) / `chown www-data` on `application/cache` +
+`application/logs` → curl the app domain. No artisan, no migrations, no key
+generation — CI3 has none of that.
+
+**Before the first run**, add the hosts entry (step 1) — the script can't do
+that (it needs elevation on the PC).
+
+The manual equivalents are below, in case you need to run a step in isolation.
+
+## 1. Hosts entry (on the Windows PC — needs Administrator)
+
+```powershell
+# preview only - prints the exact lines, changes nothing:
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1
+
+# do it (pops a UAC prompt):
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1 -Elevate
+
+# want the Mailpit UI too:
+powershell -NoProfile -ExecutionPolicy Bypass -File docker/hosts-divaa.ps1 -Elevate -Domain mailpit.app.test
+```
+
+**APPEND-ONLY.** The hosts file is shared with every other project on this PC and
+with unrelated `0.0.0.0` blackhole blocks — the script never removes, rewrites or
+reorders a line. It backs up to `%TEMP%` first, skips domains already pointing at
+{{DIVAA_IP}}, and **refuses** (exit 3) if a domain points somewhere else rather
+than silently repointing it. Entries land in a marked block so a future uninstall
+can find them:
+
+```
+# >>> divaa-docker: {{SLUG}} >>>
+{{DIVAA_IP}}  {{APP_DOMAIN}}
+# <<< divaa-docker: {{SLUG}} <<<
+```
+
+Exit codes: `0` done / nothing-to-do · `2` needs admin (prints the command to
+paste; nothing written) · `3` conflict · `1` verification failed. Without
+Administrator the write raises `UnauthorizedAccessException` — the script detects
+this up front and prints the elevated command rather than pretending it worked.
+
+## 2. Database (create once on the host — SHARED MySQL, confirm first)
+
+```bash
+ssh divaa-docker '
+  PW="$(grep "^MYSQL_ROOT_PASSWORD=" ~/data/.env | cut -d= -f2-)"
+  docker exec -i mysql mysql -uroot -p"$PW" \
+    -e "CREATE DATABASE IF NOT EXISTS {{DB}}
+        CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+'
+```
+
+Migrating off XAMPP/WAMP? Dump there, load here:
+
+```bash
+# on the PC, with the old stack still up:
+mysqldump -uroot -p old_db > dump.sql
+scp dump.sql divaa-docker:/tmp/
+ssh divaa-docker '
+  PW="$(grep "^MYSQL_ROOT_PASSWORD=" ~/data/.env | cut -d= -f2-)"
+  docker exec -i mysql mysql -uroot -p"$PW" {{DB}} < /tmp/dump.sql && rm /tmp/dump.sql
+'
+```
+
+## 3. Put secrets on the host, inject passwords
+
+```bash
+ssh divaa-docker 'mkdir -p {{BETA_PATH}}'
+scp ./.env.divaa divaa-docker:{{BETA_PATH}}/
+# (the rest of the source arrives via Mutagen in step 4)
+
+# Inject the real MySQL root + Redis passwords in place (never printed). Values are
+# passed via the environment and read with awk's ENVIRON[] — no escape processing,
+# so any special char (| / & \ $) is written byte-for-byte:
+ssh divaa-docker '
+  export MP="$(grep "^MYSQL_ROOT_PASSWORD=" ~/data/.env | cut -d= -f2-)"
+  export RP="$(grep "^REDIS_PASSWORD=" ~/data/.env | cut -d= -f2-)"
+  f={{BETA_PATH}}/.env.divaa
+  awk "
+    /^DB_PASSWORD=__INJECT_ON_HOST__\$/    {print \"DB_PASSWORD=\" ENVIRON[\"MP\"]; next}
+    /^REDIS_PASSWORD=__INJECT_ON_HOST__\$/ {print \"REDIS_PASSWORD=\" ENVIRON[\"RP\"]; next}
+    {print}
+  " "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+'
+```
+
+## 4. File-sync — Mutagen (run from the project root)
+
+```bash
+mutagen project start                    # reads ./mutagen.yml
+mutagen sync list {{MUTAGEN_NAME}}       # wait for: Watching for changes, no Conflicts
+mutagen sync list {{MUTAGEN_NAME}} -l    # confirm the permissions block is active
+mutagen project stop                     # tear down
+```
+
+**Never use `mutagen sync create --ignore ...` instead.** `mutagen.yml` carries the
+`permissions` block (0644/0755); a CLI-created session defaults to Portable mode,
+every file lands 0600, and php-fpm (www-data) can't read any of it. Check:
+
+```bash
+ssh divaa-docker 'stat -c "%a %n" {{BETA_PATH}}/index.php'   # want 644, not 600
+```
+
+(Edit-on-host instead? Skip Mutagen; use VS Code Remote-SSH.)
+
+## 5. Bring dev mode up (on the host)
+
+```bash
+ssh divaa-docker 'cd {{BETA_PATH}} && \
+  docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml up -d --build'
+# only if the app uses composer (many CI3 apps do not):
+ssh divaa-docker 'docker exec {{PREFIX}}-app sh -c "[ -f composer.json ] && composer install || true"'
+ssh divaa-docker 'docker exec {{PREFIX}}-app chown -R www-data:www-data application/cache application/logs'
+```
+
+Open **https://{{APP_DOMAIN}}**. In dev, PHP edits on the PC are live after
+Mutagen mirrors them (~1.5s) — CI3 has no build step and no caches to clear.
+
+## Back to production mode
+
+```bash
+ssh divaa-docker 'cd {{BETA_PATH}} && \
+  docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml down && \
+  docker compose -f docker-compose.divaa.yml up -d'
+```
+
+`CI_ENV` returns to `production` (from `.env.divaa`) — CI3 then hides errors and
+logs instead. There is no config cache to rebuild.
+
+## Gotchas
+
+- **`Permission denied` on every include** — Mutagen wrote the host files 0600.
+  You created the session with `mutagen sync create` instead of `mutagen project start`;
+  the `permissions` block in `mutagen.yml` is the fix. Terminate and restart via the project.
+- **White screen instead of an error page in dev** — `ENVIRONMENT` is still
+  `production`: the project's `index.php` hardcodes it instead of reading
+  `$_SERVER['CI_ENV']`. Hand-merge the stock line (see `ci3-database-env-block.php`).
+- **`Unable to connect to your database server`** — `application/config/database.php`
+  still has the literal `localhost`; it must read `getenv('DB_HOSTNAME')` (shared
+  MySQL is `mysql:3306` on the `proxy` network).
+- **`.env.divaa` must be LF.** A trailing `\r` breaks MySQL/Redis auth.
+- **Redirects to the old XAMPP URL / wrong scheme** — hardcoded `base_url` in
+  `application/config/config.php`; point it at `https://{{APP_DOMAIN}}/` or `getenv('BASE_URL')`.
+- **`application/cache` / `application/logs`** must be writable by `www-data` or
+  logging silently fails and cached pages 500.
+- **Every URL except `/` is 404** — a custom Apache `.htaccess` rewrite the app
+  relied on; port it into `docker/nginx/default.conf` (the stock CI3 rewrite is
+  already there: `try_files $uri $uri/ /index.php?$args`).
+- Verify: `ssh divaa-docker 'docker ps | grep {{PREFIX}}'`; Traefik: https://traefik.app.test

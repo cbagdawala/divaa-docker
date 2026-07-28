@@ -147,7 +147,7 @@ ssh "$HOST" "
   ' \"\$f\" > \"\$f.tmp\" && mv \"\$f.tmp\" \"\$f\"
   chmod 600 \"\$f\"
 "
-ssh "$HOST" "grep -q '__INJECT_ON_HOST__' '${BETA_PATH}/.env.divaa'" \
+ssh "$HOST" "grep -qE '^[A-Za-z_]+[[:space:]]*=[[:space:]]*__INJECT_ON_HOST__[[:space:]]*\$' '${BETA_PATH}/.env.divaa'" \
   && die "placeholders still present in host .env.divaa — is ~/data/.env readable?" || true
 echo "  injected + verified (no placeholders remain)"
 

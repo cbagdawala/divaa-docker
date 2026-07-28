@@ -1,0 +1,41 @@
+# PHP {{PHP}} FPM for {{SLUG}} (CodeIgniter 3).
+# CI3 apps typically run anywhere from PHP 7.4 to 8.x — pin the version to what
+# the application (and any composer dependencies) actually supports.
+FROM php:{{PHP}}-fpm
+
+# System libraries needed to build the common CI3 PHP extensions
+# (gd/intl/zip cover most apps: image handling, localisation, Excel/zip).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        libzip-dev \
+        libpng-dev \
+        libjpeg-dev \
+        libfreetype6-dev \
+        libicu-dev \
+        libonig-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" \
+        # CI3's classic `mysqli` database driver AND pdo_mysql — apps use one or
+        # the other depending on config/database.php (dbdriver), so ship both.
+        mysqli \
+        pdo_mysql \
+        mbstring \
+        gd \
+        zip \
+        intl \
+        opcache \
+    # Redis client extension — shared Redis on the divaa host is redis:6379
+    # (CI3 cache/session redis drivers use phpredis).
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Composer 2 (many CI3 apps pull libraries via composer; harmless otherwise).
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# App-specific PHP settings (upload/memory limits, timezone, dev-friendly opcache).
+COPY php.ini /usr/local/etc/php/conf.d/zz-app.ini
+
+WORKDIR /var/www/html

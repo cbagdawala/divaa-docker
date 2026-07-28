@@ -1,0 +1,43 @@
+# PHP {{PHP}} FPM for {{SLUG}} (CodeIgniter 4).
+# Pin the PHP version to what composer.lock requires — CodeIgniter 4.5+
+# needs PHP >= 8.1.
+FROM php:{{PHP}}-fpm
+
+# System libraries needed to build the common CodeIgniter 4 PHP extensions.
+# intl is REQUIRED by CI4 (framework hard requirement); mysqli is the default
+# CI4 database driver, pdo_mysql covers PDO-based libraries; gd/zip cover
+# image handling and Excel/zip work.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        libzip-dev \
+        libpng-dev \
+        libjpeg-dev \
+        libfreetype6-dev \
+        libicu-dev \
+        libonig-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" \
+        mysqli \
+        pdo_mysql \
+        mbstring \
+        exif \
+        pcntl \
+        bcmath \
+        gd \
+        zip \
+        intl \
+        opcache \
+    # Redis client extension — shared Redis on the divaa host is redis:6379.
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Composer 2 (for in-container installs / spark tooling).
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# App-specific PHP settings (upload/memory limits, timezone, dev-friendly opcache).
+COPY php.ini /usr/local/etc/php/conf.d/zz-app.ini
+
+WORKDIR /var/www/html

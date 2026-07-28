@@ -41,6 +41,22 @@ values are read from the host's `~/data/.env` and written into the host-only
 `.env.divaa`/`.env.local`, which are gitignored. Never bake a password into a
 committed file or print one.
 
+## Orchestration (optional)
+This section is **optional**. If you skip it, follow the numbered steps below
+exactly as before - the generator and `deploy-divaa.sh` are the source of truth
+either way, and nothing about the core flow changes.
+
+If **BuddyX** is available (it is normally auto-installed alongside divaa-docker),
+you can run `/buddyx` - or just say "orchestrate this setup" - to have BuddyX plan
+the onboarding and route sub-tasks to specialists:
+- container build / Mutagen sync / Traefik / docker-compose -> **docker-infra**
+- env files / deploy script / hosts entries / README -> **skill-author**
+- global divaa-docker host settings (IP, ssh user, services) -> the **divaa-docker-config** skill
+
+BuddyX bootstraps any missing agents in the project and gates the result through
+its review step. **Graceful fallback:** BuddyX is entirely optional - if it isn't
+present, ignore this section and run the deterministic manual steps below.
+
 ## Step 1 — Preflight & gather parameters (prompt the user)
 Verify: `ssh divaa-docker 'echo ok'` works; the target dir is Laravel (`artisan` +
 `composer.json`); it is a Mix project (see "Am I the right skill?").

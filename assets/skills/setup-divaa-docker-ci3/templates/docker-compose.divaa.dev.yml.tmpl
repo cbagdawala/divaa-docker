@@ -1,0 +1,25 @@
+# {{SLUG}} — DEV overlay for the divaa-docker host. Flips CI3 into development.
+#
+# Use TOGETHER with the base file (base provides app + web + networks + secrets):
+#   docker compose -f docker-compose.divaa.yml -f docker-compose.divaa.dev.yml up -d
+#
+# This overlay:
+#   • Sets CI_ENV=development on the `app` (php-fpm) container. Stock CI3
+#     index.php reads $_SERVER['CI_ENV'] to define ENVIRONMENT; its development
+#     branch then enables full error_reporting + display_errors itself, so no
+#     extra php.ini switch is needed here.
+#
+# CodeIgniter 3 has no frontend dev server — there is no Vite/webpack/HMR
+# container here. PHP/view edits are live as soon as they exist on THIS host
+# (bind-mounted). Topology A: edit on the PC, Mutagen mirrors the change to the
+# host (~1.5s). Topology C: edit on the host directly (VS Code Remote-SSH).
+# Either way: just refresh the browser.
+#
+# Back to production: bring the stack down and `up -d` the base file alone.
+
+services:
+  # Debug overrides win over the production values in .env.divaa
+  # (compose `environment` takes precedence over `env_file`).
+  app:
+    environment:
+      CI_ENV: development
