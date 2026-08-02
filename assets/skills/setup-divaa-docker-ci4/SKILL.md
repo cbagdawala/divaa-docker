@@ -220,7 +220,7 @@ the numbered steps in `docker/README.divaa.md` by hand.
 `permissions` block. Lifecycle, run from the project root:
 ```bash
 mutagen project start          # create + start the "<prefix>" session
-mutagen project stop           # tear it down
+mutagen project terminate      # tear it down (NOT "stop")
 mutagen sync list <prefix>     # status; add -l for the full config incl. permissions
 ```
 A `mutagen sync create --ignore ...` session silently loses the permissions block

@@ -210,7 +210,7 @@ the one exception: ignored, because the hot container writes it on the host.
 `permissions` block. Lifecycle, from the project root:
 ```bash
 mutagen project start          # create + start the "<prefix>" session
-mutagen project stop           # tear it down
+mutagen project terminate      # tear it down (NOT "stop")
 mutagen sync list <prefix>     # status; add -l for the full config incl. permissions
 ```
 A `mutagen sync create --ignore ...` session silently loses the permissions block and

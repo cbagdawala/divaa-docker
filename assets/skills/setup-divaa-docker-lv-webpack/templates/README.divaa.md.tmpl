@@ -115,7 +115,7 @@ ssh divaa-docker '
 mutagen project start                    # reads ./mutagen.yml
 mutagen sync list {{MUTAGEN_NAME}}       # wait for: Watching for changes, no Conflicts
 mutagen sync list {{MUTAGEN_NAME}} -l    # confirm the permissions block is active
-mutagen project stop                     # tear down
+mutagen project terminate                # tear down (NOT "stop")
 ```
 
 **Never use `mutagen sync create --ignore ...` instead.** `mutagen.yml` carries the
