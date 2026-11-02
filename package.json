@@ -1,6 +1,6 @@
 {
   "name": "divaa-docker",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "CLI to install the divaa-docker Agent Skills — one-command onboarding of Laravel (Vite or Laravel Mix/webpack) and CodeIgniter 3/4 apps onto the shared divaa-docker homelab host — into AI coding assistants like Claude Code and opencode.",
   "type": "module",
   "bin": {
