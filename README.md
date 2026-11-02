@@ -47,7 +47,13 @@ npx divaa-docker init --ai claude
 Restart the assistant, then invoke it by typing `/setup-divaa-docker-lv-vite` (or
 `/setup-divaa-docker-lv-webpack`), or just asking — e.g. *"set up this Laravel project on
 divaa-docker"*. Each skill's `description` also lets the model trigger it automatically on
-matching requests.
+matching requests. In **opencode**, skills aren't slash commands — just ask, and opencode
+loads the matching skill through its `skill` tool.
+
+On install, each `SKILL.md` is rewritten so the commands it gives the assistant
+(`node <skills-dir>/<skill>/generate.mjs …`) point at where that copy actually lives —
+e.g. `.opencode/skills/…` for a project install or `~/.config/opencode/skills/…` with
+`--global` — instead of Claude Code's `~/.claude/skills/`.
 
 ### BuddyX companion
 

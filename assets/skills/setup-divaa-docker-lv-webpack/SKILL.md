@@ -76,6 +76,8 @@ invalidates existing encrypted data, so flag it rather than letting it happen.
 ```bash
 node ~/.claude/skills/setup-divaa-docker-lv-webpack/generate.mjs plan --slug <slug> --target .
 ```
+(`generate.mjs` sits next to this SKILL.md; if that path does not exist, use this skill's
+own folder.)
 It marks each value `given` / `detected` / `FALLBACK ... CONFIRM`. Anything that says
 FALLBACK is a guess — confirm it before writing.
 

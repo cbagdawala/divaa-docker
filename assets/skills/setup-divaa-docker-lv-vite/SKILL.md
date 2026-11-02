@@ -67,10 +67,12 @@ writes nothing:
 ```bash
 node ~/.claude/skills/setup-divaa-docker-lv-vite/generate.mjs plan --slug <slug> --target .
 ```
+(`generate.mjs` sits next to this SKILL.md; if that path does not exist, use this skill's
+own folder.)
 It prints each parameter with its value and whether it was **given** or **derived**,
 plus the exact hosts entries that will be needed.
 
-**Then** put those values to the user with **AskUserQuestion** before generating.
+**Then** put those values to the user with **AskUserQuestion** (or your assistant's ask-the-user tool) before generating.
 Ask in one batch, offering the plan's value as the default option so confirming is
 one click — but every one of these must be overridable:
 

@@ -20,7 +20,7 @@ headline use case is exactly that - a project later needs Redis, so you ask the
 user how they want it and record it here once.
 
 The single writer is `config.mjs` (zero-dep Node, non-interactive, flag-driven).
-You gather answers with **AskUserQuestion**, **show** the resolved values, then
+You gather answers with **AskUserQuestion** (or your assistant's ask-the-user tool), **show** the resolved values, then
 persist them deterministically through `config.mjs` - the same pattern the setup
 skills use with `generate.mjs plan`/`generate`.
 
@@ -29,11 +29,14 @@ skills use with `generate.mjs plan`/`generate`.
 Mix/webpack). This skill only records the host-wide facts those skills consume.
 
 ## The store
+`config.mjs` sits next to this SKILL.md; the commands below use its installed path (if that
+path does not exist, run it from this skill's own folder).
+
 Location resolves via `os.homedir()`, so it is correct cross-platform:
 - Windows: `C:\Users\<you>\.divaa-docker\config.json`
 - POSIX: `/home/<you>/.divaa-docker/config.json`
 
-Run `node config.mjs path` to print the exact resolved path (it creates
+Run `node ~/.claude/skills/divaa-docker-config/config.mjs path` to print the exact resolved path (it creates
 nothing). Versioned JSON, LF endings, trailing newline. Schema:
 
 ```json
@@ -72,7 +75,7 @@ from `host.secretsEnv` (e.g. `~/data/.env`), mirroring the existing
 real credential through this store or print one.
 
 ## The intake flow (host facts)
-Gather the host facts with **AskUserQuestion**, offering sensible defaults as
+Gather the host facts with **AskUserQuestion** (or your assistant's ask-the-user tool), offering sensible defaults as
 one-click options but keeping each overridable. Never infer them silently.
 
 Ask for, in one batch:
@@ -92,7 +95,7 @@ Then **show** the resolved values back to the user, and only after confirmation
 persist them in one deterministic call:
 
 ```bash
-node config.mjs init \
+node ~/.claude/skills/divaa-docker-config/config.mjs init \
   --mode remote --ip 192.168.1.21 \
   --ssh-alias divaa-docker --ssh-user chintan \
   --apps-root /home/chintan/apps --proxy proxy \
@@ -120,7 +123,7 @@ change a single deep value outside `init`'s flag set, use
 
 ## Progressive service intake (the headline use case)
 When a project later needs a shared service - Redis is the common one - ask the
-user how they want it set up with **AskUserQuestion**, **show** the resolved
+user how they want it set up with **AskUserQuestion** (or your assistant's ask-the-user tool), **show** the resolved
 shape, then register it. Good questions to ask:
 
 - **shared vs dedicated** - one shared instance for all projects, or a dedicated
@@ -132,7 +135,7 @@ shape, then register it. Good questions to ask:
 
 ### Redis worked example
 ```bash
-node config.mjs add-service redis \
+node ~/.claude/skills/divaa-docker-config/config.mjs add-service redis \
   --mode shared --host redis --port 6379 \
   --database 0 --password-source host-env
 ```
@@ -156,10 +159,10 @@ coerced to their natural JSON type (`6379` -> number, `true`/`false` -> boolean)
 The **same pattern** covers any shared service - `mysql`, `mailpit`, `queue`,
 etc.:
 ```bash
-node config.mjs add-service mysql   --shared true --host mysql --port 3306
-node config.mjs add-service mailpit --host mailpit --http-port 8025 --smtp-port 1025
+node ~/.claude/skills/divaa-docker-config/config.mjs add-service mysql   --shared true --host mysql --port 3306
+node ~/.claude/skills/divaa-docker-config/config.mjs add-service mailpit --host mailpit --http-port 8025 --smtp-port 1025
 ```
-Drop one with `node config.mjs remove-service <name>`.
+Drop one with `node ~/.claude/skills/divaa-docker-config/config.mjs remove-service <name>`.
 
 ## How the setup skills consume this
 The `setup-divaa-docker-lv-vite`/`-webpack` generators resolve each host fact by
@@ -178,10 +181,10 @@ this store.
 
 To inspect what the generators will read:
 ```bash
-node config.mjs show                 # whole store as pretty JSON
-node config.mjs get host.ip          # one value (scalars raw, objects as JSON)
-node config.mjs get host.ssh.user
-node config.mjs path                 # locate the file
+node ~/.claude/skills/divaa-docker-config/config.mjs show                 # whole store as pretty JSON
+node ~/.claude/skills/divaa-docker-config/config.mjs get host.ip          # one value (scalars raw, objects as JSON)
+node ~/.claude/skills/divaa-docker-config/config.mjs get host.ssh.user
+node ~/.claude/skills/divaa-docker-config/config.mjs path                 # locate the file
 ```
 
 ## Commands reference (verified against config.mjs)
@@ -195,7 +198,7 @@ node config.mjs path                 # locate the file
 | `add-service <name> [--k v ...]` | Merge a service under `services.<name>`; use `--password-source`, never `--password` |
 | `remove-service <name>` | Drop `services.<name>` |
 
-Run `node config.mjs` with no command (or `--help`) for the built-in usage.
+Run `node ~/.claude/skills/divaa-docker-config/config.mjs` with no command (or `--help`) for the built-in usage.
 Value coercion applies to `set` and every flag: `true`/`false` -> boolean, a bare
 integer -> number, JSON-looking text -> parsed, everything else -> string (force a
 string by quoting the JSON, e.g. `'"6379"'`).
